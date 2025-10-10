@@ -109,44 +109,77 @@ The system includes comprehensive modules for complete employee management:
 
 ---
 
-## Quick Start (Docker)
 
-Run the development stack and the app (rebuild if needed):
+## Quick Start (step-by-step)
+
+Below are reproducible, step-by-step instructions that have been verified to get the app running on a development machine using Docker. Commands are shown for a Windows `cmd.exe` environment.
+
+1) Build and start the development stack (rebuild to pick up any Dockerfile changes):
 
 ```cmd
 docker compose up --watch
 ```
 
-Run Presentation:
+2) Install PHP dependencies inside the `php` container. Important: the project's seeders and factories use development-only packages (for example Faker). Install with dev dependencies so seeding works:
 
 ```cmd
-docker compose up
+docker compose exec php sh -lc "composer install --no-interaction --prefer-dist"
 ```
 
-- Run migrations:
+If the compose setup already ran `composer install` in the image (which may have omitted dev deps), run the command above to ensure dev packages are present at runtime.
+
+3) Ensure an environment file exists and the application has an encryption key.
+
+- Preferred (if a `.env.example` is present):
+
 ```cmd
-docker compose exec php sh -lc "php artisan migrate"
+docker compose exec php sh -lc "cp .env.example .env || true"
 ```
 
-- Run seeders:
+- If there is no `.env.example` in the repository (some copies may be missing it), create a `.env` with at least the DB and APP_KEY values (example below). Then generate a key:
+
 ```cmd
-docker compose exec php sh -lc "php artisan db:seed"
+docker compose exec php sh -lc "php artisan key:generate"
 ```
 
-- Reset database with fresh data:
+You should see: "Application key [base64:...] set successfully." If you still see "No application encryption key has been specified" the `.env` wasn't picked up — ensure it's in `backend/.env` inside the container.
+
+4) Run migrations and seed the database (this creates the tables and example users):
+
 ```cmd
-docker compose exec php sh -lc "php artisan migrate:fresh --seed"
+docker compose exec php sh -lc "php artisan migrate --force"
+docker compose exec php sh -lc "php artisan db:seed --force"
 ```
 
-- Run tests:
+If you want a clean slate and fresh seeded data, run:
+
 ```cmd
-docker compose exec php sh -lc "php artisan test"
+docker compose exec php sh -lc "php artisan migrate:fresh --seed --force"
 ```
 
-- Clear caches:
+5) Clear compiled caches (helpful after config/env changes):
+
 ```cmd
 docker compose exec php sh -lc "php artisan cache:clear && php artisan view:clear && php artisan config:clear"
 ```
+
+6) Access the application in your browser:
+
+- Main Application (nginx): http://localhost:8090
+- pgAdmin (if used with profile): http://localhost:8091
+
+Notes:
+- If you prefer to run commands on your host rather than inside the container, you can run `composer install`, `php artisan key:generate`, `php artisan migrate --seed` on your host machine — but ensure your PHP version and extensions match the Docker image (PHP 8.2 and postgres/pdo extensions are required).
+
+### Local (non-Docker) quick checklist
+
+- Install PHP 8.2 and required extensions (pdo, pdo_pgsql, pgsql, mbstring, xml, intl).
+- Install Composer.
+- Copy `.env.example` to `.env` or create a `.env` and set DB credentials.
+- Run `composer install` (include dev deps if you plan to run seeders/tests).
+- Run `php artisan key:generate`.
+- Run `php artisan migrate --seed`.
+
 
 ## Ports & Database
 
@@ -259,47 +292,79 @@ GET  /                  - Welcome page (role-based content)
 GET  /users            - User directory (admin only)
 ```
 
-## Troubleshooting
+## Troubleshooting (common issues and fixes)
 
-### Permission Errors
-If you encounter file permission errors like "Permission denied" for storage directories:
+Below are the most common problems you may see and how to fix them.
+
+1) "No application encryption key has been specified" / 500 error
+
+- Cause: `APP_KEY` is missing or `.env` isn't present/loaded.
+- Fix:
 
 ```cmd
-docker compose exec php sh -lc "chmod -R 775 storage bootstrap/cache"
-docker compose exec php sh -lc "chown -R www-data:www-data storage bootstrap/cache"
+docker compose exec php sh -lc "php artisan key:generate"
+docker compose exec php sh -lc "php artisan config:clear && php artisan cache:clear"
 ```
 
-### Clear Caches
-If you're seeing stale data or view compilation errors:
+2) "Class \"Faker\\Factory\" not found" or factory/seed errors
+
+- Cause: the repository's factories use Faker or other dev packages which are in `require-dev`. If the container image was built with `composer install --no-dev` those packages won't be available.
+- Fix: install dev dependencies inside the running container before seeding:
 
 ```cmd
-docker compose exec php sh -lc "php artisan cache:clear && php artisan view:clear && php artisan config:clear"
+docker compose exec php sh -lc "composer install --no-interaction --prefer-dist"
 ```
 
-### Database Issues
-If you need to reset the database completely:
+Or, for a permanent fix in development, rebuild the image to include dev deps (not recommended for production images):
 
 ```cmd
-docker compose exec php sh -lc "php artisan migrate:fresh --seed"
-```
-
-### Container Issues
-If the containers aren't working properly:
-
-```cmd
-docker compose down
 docker compose up --build
 ```
 
-### Access Application
-- **Main Application**: http://localhost:8090
-- **Database Admin (pgAdmin)**: http://localhost:8091
-  - Email: admin@admin.com
-  - Password: admin
+3) "relation \"cache\" does not exist" when clearing cache
 
-### Common Issues
+- Cause: cache driver is configured to use the database, but the cache table has not been created.
+- Fix: either switch to `file` cache driver in `.env` (CACHEDRIVER=file) or create the cache table and migrate:
 
-1. **500 Internal Server Error**: Usually permissions issue, run the permission fix commands above
-2. **CSRF Token Mismatch**: Clear browser cookies and try again
-3. **Database Connection Error**: Ensure PostgreSQL container is running
-4. **View Not Found**: Run `php artisan view:clear` to clear compiled views
+```cmd
+docker compose exec php sh -lc "php artisan cache:table && php artisan migrate"
+```
+
+4) Permission errors for `storage` or `bootstrap/cache`
+
+```cmd
+docker compose exec php sh -lc "chmod -R 775 storage bootstrap/cache || true"
+docker compose exec php sh -lc "chown -R www-data:www-data storage bootstrap/cache || true"
+```
+
+5) Containers fail to start or show 500 immediately after startup
+
+- Steps to debug:
+  - Inspect backend logs: `docker compose exec php sh -lc "tail -n 200 storage/logs/laravel.log"`
+  - Ensure DB container is healthy and reachable (postgres must report healthy).
+  - Re-run `php artisan migrate --force` and the seeders manually to see errors.
+
+6) If `composer` scripts try to copy `.env.example` but it does not exist
+
+- Some workflows expect `.env.example` to be in the repo. If you don't have it, create a minimal `.env` file (at least DB_* + APP_KEY). Example minimal contents:
+
+```text
+APP_NAME=Laravel
+APP_ENV=local
+APP_KEY=base64:GENERATE_THIS_WITH_KEY_COMMAND
+APP_DEBUG=true
+APP_URL=http://localhost:8090
+
+DB_CONNECTION=pgsql
+DB_HOST=postgres
+DB_PORT=5432
+DB_DATABASE=app
+DB_USERNAME=app
+DB_PASSWORD=app
+```
+
+Then run `php artisan key:generate` inside the container.
+
+If you want, you can copy a tested `.env` into `backend/.env` before starting Docker. The repository may include a `.env` created during development (check `backend/.env`), but do not commit sensitive values to source control.
+
+If you run into a specific error not listed here, open `backend/storage/logs/laravel.log` and paste the last 50–200 lines when requesting help.
