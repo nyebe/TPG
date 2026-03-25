@@ -37,7 +37,7 @@ RUN if [ -f composer.json ]; then composer dump-autoload --optimize; fi
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache || true
 
 # Nginx config
-COPY nginx.config/default.conf /etc/nginx/http.d/default.conf
+COPY nginx.conf /etc/nginx/http.d/default.conf
 
 # Supervisor config
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
