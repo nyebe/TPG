@@ -2,9 +2,12 @@ FROM php:8.2-fpm-alpine
 
 ARG COMPOSER_ALLOW_SUPERUSER=1
 
-# System dependencies and PHP extensions required for Laravel + Postgres
+# Install system deps + nginx + supervisor + envsubst
 RUN apk add --no-cache \
     bash \
+    nginx \
+    supervisor \
+    gettext \
     oniguruma-dev \
     libxml2-dev \
     zip \
@@ -12,30 +15,36 @@ RUN apk add --no-cache \
     git \
     icu-dev \
     postgresql-dev \
+    curl \
     $PHPIZE_DEPS \
     && docker-php-ext-install pdo pdo_pgsql pgsql intl xml opcache \
     && pecl install redis || true \
     && docker-php-ext-enable redis || true \
-    && apk add --no-cache --virtual .composer-deps curl \
-    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer \
-    && apk del .composer-deps
+    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
 WORKDIR /var/www/html
 
-# Copy composer files first to leverage Docker cache when installing deps
+# Composer caching
 COPY composer.json composer.lock* ./
-
 RUN if [ -f composer.json ]; then composer install --no-dev --no-scripts --no-autoloader --prefer-dist; fi
 
-# Copy the rest of the app
-COPY . ./
+# Copy app
+COPY . .
 
-# Run composer dump-autoload if composer.json was provided
 RUN if [ -f composer.json ]; then composer dump-autoload --optimize; fi
 
-# Create storage and bootstrap cache directories with proper permissions
+# Permissions
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache || true
 
-EXPOSE 9000
+# Nginx config
+COPY nginx.config/default.conf /etc/nginx/http.d/default.conf
 
-CMD ["php-fpm"]
+# Supervisor config
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Remove default nginx fallback config
+RUN rm -f /etc/nginx/http.d/default.conf.default || true
+
+EXPOSE 8080
+
+CMD ["/usr/bin/supervisord", "-n"]
